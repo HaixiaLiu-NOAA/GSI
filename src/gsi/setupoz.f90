@@ -110,10 +110,10 @@ subroutine setupozlay(obsLL,odiagLL,lunin,mype,stats_oz,nlevs,nreal,nobs,&
   use mpeu_util, only: die,perr,getindex
   use kinds, only: r_kind,r_single,i_kind
 
-  use state_vectors, only: svars3d, levels
+  use state_vectors, only: svars3d, levels, nsdim
 
   use constants, only : zero,half,one,two,tiny_r_kind
-  use constants, only : rozcon,cg_term,wgtlim,h300,r10
+  use constants, only : rozcon,cg_term,wgtlim,h300,r10,r100,r1000
 
   use m_obsdiagNode, only : obs_diag
   use m_obsdiagNode, only : obs_diags
@@ -131,6 +131,8 @@ subroutine setupozlay(obsLL,odiagLL,lunin,mype,stats_oz,nlevs,nreal,nobs,&
   use m_obsLList, only : obsLList
   use obsmod, only : nloz_omi
   use obsmod, only : luse_obsdiag
+
+  use constants, only : constoz
 
   use obsmod, only: netcdf_diag, binary_diag, dirname
   use nc_diag_write_mod, only: nc_diag_init, nc_diag_header, nc_diag_metadata, &
@@ -201,6 +203,7 @@ subroutine setupozlay(obsLL,odiagLL,lunin,mype,stats_oz,nlevs,nreal,nobs,&
   real(r_kind),dimension(nlevs):: pobs,gross,tnoise
   real(r_kind),dimension(nreal+nlevs,nobs):: data
   real(r_kind),dimension(nsig+1)::prsitmp
+  real(r_kind),dimension(nsig)::ozgestmp
   real(r_single),dimension(nlevs):: pob4,grs4,err4
   real(r_single),dimension(ireal,nobs):: diagbuf
   real(r_single),allocatable,dimension(:,:,:)::rdiagbuf
@@ -212,6 +215,7 @@ subroutine setupozlay(obsLL,odiagLL,lunin,mype,stats_oz,nlevs,nreal,nobs,&
   real(r_kind),dimension(nsig,nloz_omi+1):: doz_dz1
   integer(i_kind) :: oz_ind, nind, nnz
   type(sparr2) :: dhx_dx
+  real(r_single), dimension(nsdim) :: dhx_dx_array
 
   integer(i_kind) i,nlev,ii,jj,iextra,ibin, kk, nperobs
   integer(i_kind) k,j,nz,jc,idia,irdim1,istatus,ioff0
@@ -223,6 +227,8 @@ subroutine setupozlay(obsLL,odiagLL,lunin,mype,stats_oz,nlevs,nreal,nobs,&
 
   real(r_kind),dimension(4):: tempwij
   integer(i_kind) nlevp,nlayers
+
+  integer(i_kind) k1,k2
   
   character(12) string
   character(10) filex
@@ -410,6 +416,12 @@ subroutine setupozlay(obsLL,odiagLL,lunin,mype,stats_oz,nlevs,nreal,nobs,&
            call grdcrd1(ozp_omi(nloz_omi),prsitmp,nsig+1,-1)
         end if
         
+        call tintrp2a1(ges_oz,ozgestmp,dlat,dlon,dtime,hrdifsig,&
+          nsig,mype,nfldsig)
+        call tintrp2a1(ges_prsi, prsitmp,dlat,dlon,dtime,hrdifsig,&
+          nsig+1,mype,nfldsig)
+
+
         if (obstype /= 'omieff' .and. obstype /= 'tomseff') then
            call intrp3oz1(ges_oz,ozges,dlat,dlon,ozp,dtime,&
                 nlevs,mype,doz_dz)
@@ -565,16 +577,35 @@ subroutine setupozlay(obsLL,odiagLL,lunin,mype,stats_oz,nlevs,nreal,nobs,&
               endif
 
               if (netcdf_diag) then
-                 call nc_diag_metadata("MPI_Task_Number", mype                      )
-                 call nc_diag_metadata("Latitude",        sngl(data(ilate,i))       )
-                 call nc_diag_metadata("Longitude",       sngl(data(ilone,i))       )
-                 call nc_diag_metadata("Time",            sngl(data(itime,i)-time_offset) )
-                 call nc_diag_metadata("Reference_Pressure",     sngl(pobs(k))      )
-                 call nc_diag_metadata("Analysis_Use_Flag",      iouse(k)           )
-                 call nc_diag_metadata("Observation",                  sngl(ozobs(k)))
-                 call nc_diag_metadata("Inverse_Observation_Error",    sngl(errorinv))
-                 call nc_diag_metadata("Obs_Minus_Forecast_adjusted",  sngl(ozone_inv(k)))
+
+                 k1 = k
+                 k2 = k - 1
+!                if(k2 == 0)k2 = 1
+                 if(k2 == 0)pobs(k2)=0.001_r_kind
+                 if(k == nlevs)then
+                   k1=nlevs-1
+                   k2=1
+                 endif
+                 if (obstype == 'sbuv2' .or. obstype == 'ompsnp' ) then
+                    call nc_diag_metadata("TopLevelPressure",sngl(pobs(k2)*r100))
+                    call nc_diag_metadata("BottomLevelPressure", sngl(pobs(k1)*r100))
+                 else
+                    call nc_diag_metadata("TopLevelPressure",sngl(prsitmp(nsig+1)*r1000) )
+                    call nc_diag_metadata("BottomLevelPressure", sngl(prsitmp(1)*r1000) )
+                 endif
+                 call nc_diag_metadata("MPI_Task_Number", mype)
+                 call nc_diag_metadata("Latitude",        sngl(data(ilate,i)))
+                 call nc_diag_metadata("Longitude",       sngl(data(ilone,i)))
+                 call nc_diag_metadata("Time", sngl(data(itime,i)-time_offset) )
+                 call nc_diag_metadata("Reference_Pressure", sngl(pobs(k)*r100)            )
+                 call nc_diag_metadata("Analysis_Use_Flag",      iouse(k))
+                 call nc_diag_metadata("Observation", sngl(ozobs(k)))
+                 call nc_diag_metadata("Inverse_Observation_Error", sngl(errorinv))
+                 call nc_diag_metadata("Input_Observation_Error", sngl(error(k)))
+                 call nc_diag_metadata("Obs_Minus_Forecast_adjusted", sngl(ozone_inv(k)))
                  call nc_diag_metadata("Obs_Minus_Forecast_unadjusted",sngl(ozone_inv(k)))
+                 call nc_diag_metadata("Forecast_unadjusted", sngl(ozges(k)))
+                 call nc_diag_metadata("Forecast_adjusted",sngl(ozges(k)))
                  if (obstype == 'gome' .or. obstype == 'omieff'  .or. &
                      obstype == 'omi'  .or. obstype == 'tomseff' ) then
                     call nc_diag_metadata("Solar_Zenith_Angle", sngl(data(isolz,i)) )
@@ -589,10 +620,12 @@ subroutine setupozlay(obsLL,odiagLL,lunin,mype,stats_oz,nlevs,nreal,nobs,&
                     call nc_diag_metadata("Row_Anomaly_Index",         sngl(rmiss)  )
                  endif
                  if (save_jacobian) then
-                   call nc_diag_data2d("Observation_Operator_Jacobian_stind", dhx_dx%st_ind)
-                   call nc_diag_data2d("Observation_Operator_Jacobian_endind", dhx_dx%end_ind)
-                   call nc_diag_data2d("Observation_Operator_Jacobian_val", real(dhx_dx%val,r_single))
+                    call fullarray(dhx_dx, dhx_dx_array)
+                    call nc_diag_data2d("Observation_Operator_Jacobian", dhx_dx_array)
                  endif
+!                call nc_diag_data2d("mass_concentration_of_ozone_in_air", sngl(ozgestmp))
+                 call nc_diag_data2d("mole_fraction_of_ozone_in_air", sngl(ozgestmp*constoz))
+                 call nc_diag_data2d("air_pressure_levels",sngl(prsitmp*r1000))
               endif
            endif
 
@@ -920,16 +953,7 @@ subroutine setupozlay(obsLL,odiagLL,lunin,mype,stats_oz,nlevs,nreal,nobs,&
 
      if (.not. append_diag) then ! don't write headers on append - the module will break?
         call nc_diag_header("date_time",ianldate )
-        call nc_diag_header("Satellite_Sensor", isis)
-        call nc_diag_header("Satellite", dplat(is))
-        call nc_diag_header("Observation_type", obstype)
-        call nc_diag_header("pobs", pobs)
-        call nc_diag_header("gross",gross)
-        call nc_diag_header("tnoise",tnoise)
-        if (save_jacobian) then
-          call nc_diag_header("jac_nnz", nnz)
-          call nc_diag_header("jac_nind", nind)
-        endif
+        call nc_diag_header("Number_of_state_vars", nsdim          )
      endif
 
   end subroutine init_netcdf_diag_
