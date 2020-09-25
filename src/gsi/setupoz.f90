@@ -581,7 +581,7 @@ subroutine setupozlay(obsLL,odiagLL,lunin,mype,stats_oz,nlevs,nreal,nobs,&
                  k1 = k
                  k2 = k - 1
 !                if(k2 == 0)k2 = 1
-                 if(k2 == 0)pobs(k2)=0.001_r_kind
+                 if(k2 == 0)pobs(k2)=0.0001_r_kind  ! L127 model top at 0.01mb
                  if(k == nlevs)then
                    k1=nlevs-1
                    k2=1
